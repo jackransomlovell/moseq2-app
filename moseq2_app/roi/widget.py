@@ -194,7 +194,7 @@ class ArenaMaskWidget:
             # get strel
             dilate_strel = select_strel(session_config['plane_bg_roi_shape'], tuple(session_config['plane_bg_roi_dilate']))
             # get mask
-            roi = get_avg_plane_roi(mean_plane, dilate_strel)
+            mask = get_avg_plane_roi(mean_plane, dilate_strel)
 
 
         # filter for included mouse height range
