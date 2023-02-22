@@ -177,25 +177,24 @@ class ArenaMaskWidget:
                                      frame_size=background.shape[::-1])
 
         # subtract background
-	if not plane_bgsub:
+        if not plane_bgsub:
             frames = (background - raw_frames)
             # filter out regions outside of ROI
             frames = apply_roi(frames, mask)
         else:
             frames, planes = plane_bgsub(frames,
-					 floor_range = session_config['plane_bg_floor_range'], 
-					 iters = session_config['plane_bg_iters'],
- 					 noise_tolerance = session_config['plane_bg_noise_tol'],
-					 in_ratio = session_config['plane_bg_inratio'],
-					 non_zero_ransac = session_config['plane_bg_nonzero'])
+                                         floor_range = session_config['plane_bg_floor_range'], 
+                                         iters = session_config['plane_bg_iters'],
+                                         noise_tolerance = session_config['plane_bg_noise_tol'],
+                                         in_ratio = session_config['plane_bg_inratio'],
+                                         non_zero_ransac = session_config['plane_bg_nonzero'])
 	
-	    # get avg 
-	    mean_plane = np.mean(planes,axis=0)#check if median is better
+    	    # get avg 
+            mean_plane = np.mean(planes,axis=0)#check if median is better
             # get strel
             dilate_strel = select_strel(session_config['plane_bg_roi_shape'], tuple(session_config['plane_bg_roi_dilate']))
             # get mask
             mask = get_avg_plane_roi(mean_plane, dilate_strel)
-
 
         # filter for included mouse height range
         frames = threshold_chunk(frames, session_config['min_height'], session_config['max_height'])
@@ -283,6 +282,14 @@ class ArenaMaskData(param.Parameterized):
     movie_dtype = param.String(default="<u2", label="Raw depth video datatype (for .dat files)")
     pixel_format = param.Selector(default="gray16le", objects=["gray16le", "gray16be"], label="Raw depth video datatype (for .avi or .mkv files)")
     compress = param.Boolean(default=False, label="Compress raw data after extraction")
+
+    #### plane bg sub ####
+    plane_bg_flag = param.Boolean(label="Show parameters for and perform plane background subtraction")
+    plane_bg_floor_range = param.Range(default=(625, 650), bounds=(400, 1000), label="Floor depth range to be subtracted (mm)")
+    plane_bg_iters = param.Integer(default=100, bounds=(1, 1000), label="RANSAC plane estimation iterations")
+    plane_bg_noise_tol = param.Number(default=30.0, bounds=(0, None), label="RANSAC noise tolerance")
+    plane_bg_inratio = param.Number(default=0.1, bounds = (0.0, 1.0)) 
+    plane_bg_nonzero = param.Boolean(default = True, label = "Only incluide nonzero pixels in plane estimation")
 
     ### flags and actions ###
     computing_arena = param.Boolean(default=False)  # used to indicate a computation is being performed
@@ -412,6 +419,7 @@ class ArenaMaskView(Viewer):
         extraction_frame_num = _link_data(pn.widgets.IntInput, "frames_to_extract")
         compute_extraction_btn = _link_data(pn.widgets.Button, "compute_extraction")
         show_adv_extraction = _link_data(pn.widgets.Checkbox, "adv_extraction_flag")
+        show_plane_bg_extraction = _link_data(pn.widgets.Checkbox, "plane_bg_flag")
 
         ### subsection: optional advanced extraction parameters ###
         crop_size = _link_data(pn.widgets.NumberInput, "crop_size", height=40)
@@ -466,6 +474,25 @@ class ArenaMaskView(Viewer):
         )
         show_adv_extraction.link(adv_extraction, value='visible')
 
+        ### subsection: compute plane bg subtraction ### 
+        plane_bg_floor_range = _link_data(pn.widgets.IntRangeSlider, "plane_bg_floor_range")
+        plane_bg_iters = _link_data(pn.widgets.IntSlider, "plane_bg_iters", step=1)
+        plane_bg_noise_tol = _link_data(pn.widgets.NumberInput, "plane_bg_noise_tol", height=45)
+        plane_bg_inratio = _link_data(pn.widgets.FloatSlider, "plane_bg_inratio", step = .1)
+        plane_bg_nonzero = _link_data(pn.widgets.Checkbox, "plane_bg_nonzero", height=20)
+
+        plane_bg_extraction = pn.Column(
+                plane_bg_floor_range,
+                plane_bg_iters,
+                plane_bg_noise_tol,
+                plane_bg_inratio,
+                plane_bg_nonzero,
+                visible=False,
+                scroll = True,
+                height=175
+                )
+        show_plane_bg_extraction.link(plane_bg_extraction , value='visible')
+
         ### subsection: saving and indicator ###
         save_session_and_move_btn = _link_data(pn.widgets.Button, "save_session_and_move_btn")
         save_session_btn = _link_data(pn.widgets.Button, "save_session_btn")
@@ -515,6 +542,8 @@ class ArenaMaskView(Viewer):
             indicator2,
             show_adv_extraction,
             adv_extraction,
+            show_plane_bg_extraction,
+            plane_bg_extraction,
             pn.pane.Markdown('### Save', height=40),
             save_session_btn,
             save_session_and_move_btn,
