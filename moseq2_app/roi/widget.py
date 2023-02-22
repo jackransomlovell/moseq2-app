@@ -20,7 +20,7 @@ from moseq2_extract.util import select_strel, get_strels
 from moseq2_extract.extract.extract import extract_chunk
 from moseq2_extract.util import detect_and_set_camera_parameters
 from moseq2_app.util import write_yaml, read_yaml, read_and_clean_config, update_config
-from moseq2_extract.extract.proc import get_bground_im_file, get_roi, apply_roi, threshold_chunk
+from moseq2_extract.extract.proc import get_bground_im_file, get_roi, apply_roi, threshold_chunk, plane_bgsub, get_avg_plane_roi
 
 
 
@@ -109,6 +109,12 @@ class ArenaMaskWidget:
         session['movie_dtype'] = self.session_data.movie_dtype
         session['noise_tolerance'] = self.session_data.noise_tolerance
         session['pixel_format'] = self.session_data.pixel_format
+
+        session['plane_bg_floor_range'] = self.session_data.plane_bg_floor_range
+        session['plane_bg_iters'] = self.session_data.plane_bg_iters
+        session['plane_bg_noise_tol'] = self.session_data.plane_bg_noise_tol
+        session['plane_bg_inratio'] = self.session_data.plane_bg_inratio
+        session['plane_bg_nonzero'] = self.session_data.plane_bg_nonzero
         # some simple cleanup for the spatial filter. Maybe should be more sophisticated? or move to the data class?
         spatial_filter = eval(self.session_data.spatial_filter)
         if isinstance(spatial_filter, (int, float)):
@@ -159,7 +165,7 @@ class ArenaMaskWidget:
         # add to view
         return background, rois
 
-    def compute_extraction(self, plane_bgsub = False):
+    def compute_extraction(self, plane_bg_sub = False):
         self.set_session_config_vars()
 
         folder = self.session_data.path
@@ -177,12 +183,12 @@ class ArenaMaskWidget:
                                      frame_size=background.shape[::-1])
 
         # subtract background
-        if not plane_bgsub:
+        if not plane_bg_sub :
             frames = (background - raw_frames)
             # filter out regions outside of ROI
             frames = apply_roi(frames, mask)
         else:
-            frames, planes = plane_bgsub(frames,
+            frames, planes = plane_bgsub(raw_frames,
                                          floor_range = session_config['plane_bg_floor_range'], 
                                          iters = session_config['plane_bg_iters'],
                                          noise_tolerance = session_config['plane_bg_noise_tol'],
@@ -192,7 +198,7 @@ class ArenaMaskWidget:
     	    # get avg 
             mean_plane = np.mean(planes,axis=0)#check if median is better
             # get strel
-            dilate_strel = select_strel(session_config['plane_bg_roi_shape'], tuple(session_config['plane_bg_roi_dilate']))
+            dilate_strel = select_strel(session_config['bg_roi_shape'], tuple(session_config['bg_roi_dilate']))
             # get mask
             mask = get_avg_plane_roi(mean_plane, dilate_strel)
 
@@ -233,7 +239,7 @@ class ArenaMaskData(param.Parameterized):
     # defines how many iterations cv2.dilate should be run on mask computed for floor
     mask_dilations = param.Integer(default=3, bounds=(0, 10), label="Floor mask dilation iterations")
     # defines thresholds used to locate mouse for extractions
-    mouse_height = param.Range(default=(10, 110), bounds=(0, 175), label="Mouse height clip (mm)")
+    mouse_height = param.Range(default=(10, 110), bounds=(0, 700), label="Mouse height clip (mm)")
     # stores the extracted frame number to display and how many to extract in test
     frame_num = param.Integer(default=0, bounds=(0, 99), label="Display frame (index)")
     frames_to_extract = param.Integer(default=100, bounds=(1, None), label="Number of test frames to extract")
@@ -328,7 +334,7 @@ class ArenaMaskData(param.Parameterized):
     @param.depends('compute_extraction', 'next_session', watch=True)
     def get_extraction(self):
         self.computing_extraction = True
-        mouse, frame = self.controller.compute_extraction()
+        mouse, frame = self.controller.compute_extraction(self.plane_bg_flag)
         self.images['Extracted mouse'] = mouse
         self.images['Frame (background subtracted)'] = frame
 
