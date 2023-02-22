@@ -159,7 +159,7 @@ class ArenaMaskWidget:
         # add to view
         return background, rois
 
-    def compute_extraction(self):
+    def compute_extraction(self, plane_bgsub = False):
         self.set_session_config_vars()
 
         folder = self.session_data.path
@@ -177,10 +177,25 @@ class ArenaMaskWidget:
                                      frame_size=background.shape[::-1])
 
         # subtract background
-        frames = (background - raw_frames)
+	if not plane_bgsub:
+            frames = (background - raw_frames)
+            # filter out regions outside of ROI
+            frames = apply_roi(frames, mask)
+        else:
+            frames, planes = plane_bgsub(frames,
+					 floor_range = session_config['plane_bg_floor_range'], 
+					 iters = session_config['plane_bg_iters'],
+ 					 noise_tolerance = session_config['plane_bg_noise_tol'],
+					 in_ratio = session_config['plane_bg_inratio'],
+					 non_zero_ransac = session_config['plane_bg_nonzero'])
+	
+	    # get avg 
+	    mean_plane = np.mean(planes,axis=0)#check if median is better
+            # get strel
+            dilate_strel = select_strel(session_config['plane_bg_roi_shape'], tuple(session_config['plane_bg_roi_dilate']))
+            # get mask
+            roi = get_avg_plane_roi(mean_plane, dilate_strel)
 
-        # filter out regions outside of ROI
-        frames = apply_roi(frames, mask)
 
         # filter for included mouse height range
         frames = threshold_chunk(frames, session_config['min_height'], session_config['max_height'])
