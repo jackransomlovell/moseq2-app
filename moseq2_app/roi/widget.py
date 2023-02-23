@@ -13,14 +13,16 @@ from tqdm.auto import tqdm
 from functools import reduce
 from panel.viewable import Viewer
 from bokeh.models import HoverTool
-from os.path import exists, basename, dirname
+from os.path import exists, basename, dirname, join
 from moseq2_app.gui.progress import get_sessions
 from moseq2_extract.io.video import load_movie_data
 from moseq2_extract.util import select_strel, get_strels
 from moseq2_extract.extract.extract import extract_chunk
 from moseq2_extract.util import detect_and_set_camera_parameters
 from moseq2_app.util import write_yaml, read_yaml, read_and_clean_config, update_config
-from moseq2_extract.extract.proc import get_bground_im_file, get_roi, apply_roi, threshold_chunk, plane_bgsub, get_avg_plane_roi
+from moseq2_extract.extract.proc import get_bground_im_file, get_roi, apply_roi, threshold_chunk, median_plane, get_med_plane_roi, get_bground_plane, compute_bground
+import moseq2_extract.io.video
+from moseq2_extract.io.image import read_image, write_image
 
 
 
@@ -36,6 +38,7 @@ _hover_dict = {
 class ArenaMaskWidget:
     def __init__(self, data_dir, config_file, session_config_path, skip_extracted=False) -> None:
         self.backgrounds = {}
+        self.planes = {}
         self.extracts = {}
         self.data_dir = data_dir
         self.session_config_path = session_config_path
@@ -110,9 +113,12 @@ class ArenaMaskWidget:
         session['noise_tolerance'] = self.session_data.noise_tolerance
         session['pixel_format'] = self.session_data.pixel_format
 
+        session['plane_bg_flag'] = self.session_data.plane_bg_flag
         session['plane_bg_floor_range'] = self.session_data.plane_bg_floor_range
         session['plane_bg_iters'] = self.session_data.plane_bg_iters
+        session['plane_bg_nframes'] = self.session_data.plane_bg_nframes
         session['plane_bg_noise_tol'] = self.session_data.plane_bg_noise_tol
+        session['roi_noise_tol'] = self.session_data.roi_noise_tol
         session['plane_bg_inratio'] = self.session_data.plane_bg_inratio
         session['plane_bg_nonzero'] = self.session_data.plane_bg_nonzero
         # some simple cleanup for the spatial filter. Maybe should be more sophisticated? or move to the data class?
@@ -149,32 +155,34 @@ class ArenaMaskWidget:
         self.set_session_config_vars()
 
         folder = self.session_data.path
-        background = self.get_background(folder)
 
         session_config = self.session_config[folder]
+
+        plane, background = self.get_background()
 
         strel_dilate = select_strel(session_config['bg_roi_shape'], tuple(session_config['bg_roi_dilate']))
         strel_erode = select_strel(session_config['bg_roi_shape'], tuple(session_config['bg_roi_erode']))
 
-        rois, _, = get_roi(background,
-                            **session_config,
-                            strel_dilate=strel_dilate,
-                            strel_erode=strel_erode,
-                            get_all_data=False
-                            )
+        if not session_config['plane_bg_flag']:
+            rois, _, = get_roi(background,
+                               **session_config,
+                               strel_dilate=strel_dilate,
+                               strel_erode=strel_erode,
+                               get_all_data=False
+                               )
+        else:
+            rois = get_med_plane_roi(session_config['raw_frame'], plane, strel_dilate, session_config['roi_noise_tol'])[None]
         # add to view
         return background, rois
 
-    def compute_extraction(self, plane_bg_sub = False):
+    def compute_extraction(self): 
         self.set_session_config_vars()
 
         folder = self.session_data.path
-        background = self.get_background(folder)
+
         session_config = self.session_config[folder]
 
-        # TODO: compute mask only if not already done
-        _, rois = self.compute_arena_mask()
-        mask = rois[self.session_data.mask_index]
+        plane, background = self.get_background()
 
         # get segmented frame
         raw_frames = load_movie_data(self.sessions[folder],
@@ -182,26 +190,16 @@ class ArenaMaskWidget:
                                      **session_config,
                                      frame_size=background.shape[::-1])
 
-        # subtract background
-        if not plane_bg_sub :
-            frames = (background - raw_frames)
-            # filter out regions outside of ROI
-            frames = apply_roi(frames, mask)
-        else:
-            frames, planes = plane_bgsub(raw_frames,
-                                         floor_range = session_config['plane_bg_floor_range'], 
-                                         iters = session_config['plane_bg_iters'],
-                                         noise_tolerance = session_config['plane_bg_noise_tol'],
-                                         in_ratio = session_config['plane_bg_inratio'],
-                                         non_zero_ransac = session_config['plane_bg_nonzero'])
-	
-    	    # get avg 
-            mean_plane = np.mean(planes,axis=0)#check if median is better
-            # get strel
-            dilate_strel = select_strel(session_config['bg_roi_shape'], tuple(session_config['bg_roi_dilate']))
-            # get mask
-            mask = get_avg_plane_roi(mean_plane, dilate_strel)
+        # assign a single frame to session config for plane roi
+        session_config['raw_frame'] = raw_frames[0]
 
+        
+        _, rois = self.compute_arena_mask()
+        mask = rois[self.session_data.mask_index]
+
+        # subtract background
+        frames = (background-raw_frames).astype(raw_frames.dtype)
+	
         # filter for included mouse height range
         frames = threshold_chunk(frames, session_config['min_height'], session_config['max_height'])
 
@@ -214,19 +212,42 @@ class ArenaMaskWidget:
                                    )
         return extraction['depth_frames'], frames
 
-    def get_background(self, folder=None):
+    def get_background(self):
         '''Assuming this will be called by an event-triggered function'''
+
+        self.set_session_config_vars()
+
+        folder = self.session_data.path
+
+        session_config = self.session_config[folder]
+
         if folder is None:
             folder = self.session_data.path
         if folder not in self.backgrounds:
             # get full path
             file = self.sessions[folder]
-            # compute background
-            bground = get_bground_im_file(file, frame_stride=1000)
+            # compute bground
+            kwargs = {}
+            bground, plane = compute_bground(file,
+                                             session_config['plane_bg_flag'],
+                                             finfo = None,
+                                             output_dir = None,
+                                             nframes = session_config['plane_bg_nframes'],
+                                             # hard coded as that is what original code was
+                                             frame_stride = 1000, 
+                                             med_scale = 5, 
+                                             floor_range = session_config['plane_bg_floor_range'],
+                                             noise_tolerance = session_config['plane_bg_noise_tol'],
+                                             inratio = session_config['plane_bg_inratio'],
+                                             iters = session_config['plane_bg_iters'],
+                                             non_zero_ransac = session_config['plane_bg_nonzero'],
+                                             **kwargs
+                                             )
             # save for recall later
             self.backgrounds[folder] = bground
+            self.planes[folder] = plane
 
-        return self.backgrounds[folder]
+        return self.planes[folder], self.backgrounds[folder]
 
 
 # define data class first
@@ -293,7 +314,9 @@ class ArenaMaskData(param.Parameterized):
     plane_bg_flag = param.Boolean(label="Show parameters for and perform plane background subtraction")
     plane_bg_floor_range = param.Range(default=(625, 650), bounds=(400, 1000), label="Floor depth range to be subtracted (mm)")
     plane_bg_iters = param.Integer(default=100, bounds=(1, 1000), label="RANSAC plane estimation iterations")
-    plane_bg_noise_tol = param.Number(default=30.0, bounds=(0, None), label="RANSAC noise tolerance")
+    plane_bg_nframes = param.Integer(default = 100, bounds = (1,1000), label="Number of frames to include in plane bground")
+    plane_bg_noise_tol = param.Number(default=10.0, bounds=(0, None), label="RANSAC noise tolerance")
+    roi_noise_tol = param.Number(default=5.0, bounds=(0, None), label="RANSAC noise tolerance")
     plane_bg_inratio = param.Number(default=0.1, bounds = (0.0, 1.0)) 
     plane_bg_nonzero = param.Boolean(default = True, label = "Only incluide nonzero pixels in plane estimation")
 
@@ -334,7 +357,7 @@ class ArenaMaskData(param.Parameterized):
     @param.depends('compute_extraction', 'next_session', watch=True)
     def get_extraction(self):
         self.computing_extraction = True
-        mouse, frame = self.controller.compute_extraction(self.plane_bg_flag)
+        mouse, frame = self.controller.compute_extraction()
         self.images['Extracted mouse'] = mouse
         self.images['Frame (background subtracted)'] = frame
 
@@ -483,14 +506,18 @@ class ArenaMaskView(Viewer):
         ### subsection: compute plane bg subtraction ### 
         plane_bg_floor_range = _link_data(pn.widgets.IntRangeSlider, "plane_bg_floor_range")
         plane_bg_iters = _link_data(pn.widgets.IntSlider, "plane_bg_iters", step=1)
+        plane_bg_nframes = _link_data(pn.widgets.IntSlider, "plane_bg_nframes", step=1)
         plane_bg_noise_tol = _link_data(pn.widgets.NumberInput, "plane_bg_noise_tol", height=45)
+        roi_noise_tol = _link_data(pn.widgets.NumberInput, "roi_noise_tol" , height=45)
         plane_bg_inratio = _link_data(pn.widgets.FloatSlider, "plane_bg_inratio", step = .1)
         plane_bg_nonzero = _link_data(pn.widgets.Checkbox, "plane_bg_nonzero", height=20)
 
         plane_bg_extraction = pn.Column(
                 plane_bg_floor_range,
                 plane_bg_iters,
+                plane_bg_nframes,
                 plane_bg_noise_tol,
+                roi_noise_tol, 
                 plane_bg_inratio,
                 plane_bg_nonzero,
                 visible=False,
