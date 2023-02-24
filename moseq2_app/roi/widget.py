@@ -20,7 +20,7 @@ from moseq2_extract.util import select_strel, get_strels
 from moseq2_extract.extract.extract import extract_chunk
 from moseq2_extract.util import detect_and_set_camera_parameters
 from moseq2_app.util import write_yaml, read_yaml, read_and_clean_config, update_config
-from moseq2_extract.extract.proc import get_bground_im_file, get_roi, apply_roi, threshold_chunk, median_plane, get_med_plane_roi, get_bground_plane, compute_bground
+from moseq2_extract.extract.proc import get_roi, apply_roi, threshold_chunk, median_plane, get_med_plane_roi, get_bground_plane, compute_bground
 import moseq2_extract.io.video
 from moseq2_extract.io.image import read_image, write_image
 
@@ -149,7 +149,12 @@ class ArenaMaskWidget:
     def save_session_parameters(self):
         self.set_session_config_vars()
 
-        write_yaml(self.session_config, self.session_config_path)
+        for k,v in self.session_config.items():
+            if 'raw_frame' in v.keys():
+                print(f'Removing raw frame from {k} recompute extraction to get new ROI')
+                v.pop('raw_frame')
+
+        write_yaml(dict(self.session_config), self.session_config_path)
 
     def compute_arena_mask(self):
         self.set_session_config_vars()
@@ -171,7 +176,10 @@ class ArenaMaskWidget:
                                get_all_data=False
                                )
         else:
-            rois = get_med_plane_roi(session_config['raw_frame'], plane, strel_dilate, session_config['roi_noise_tol'])[None]
+            rois = get_med_plane_roi(session_config['raw_frame'].reshape(background.shape),
+                                     plane,
+                                     strel_dilate,
+                                     session_config['roi_noise_tol'])[None]
         # add to view
         return background, rois
 
@@ -191,7 +199,7 @@ class ArenaMaskWidget:
                                      frame_size=background.shape[::-1])
 
         # assign a single frame to session config for plane roi
-        session_config['raw_frame'] = raw_frames[0]
+        session_config['raw_frame'] = raw_frames[0].ravel()
 
         
         _, rois = self.compute_arena_mask()
@@ -219,7 +227,8 @@ class ArenaMaskWidget:
 
         folder = self.session_data.path
 
-        session_config = self.session_config[folder]
+        session_config = self.session_config[folder].copy()
+        session_config.pop('output_dir')
 
         if folder is None:
             folder = self.session_data.path
@@ -229,18 +238,8 @@ class ArenaMaskWidget:
             # compute bground
             kwargs = {}
             bground, plane = compute_bground(file,
-                                             session_config['plane_bg_flag'],
-                                             finfo = None,
                                              output_dir = None,
-                                             nframes = session_config['plane_bg_nframes'],
-                                             # hard coded as that is what original code was
-                                             frame_stride = 1000, 
-                                             med_scale = 5, 
-                                             floor_range = session_config['plane_bg_floor_range'],
-                                             noise_tolerance = session_config['plane_bg_noise_tol'],
-                                             inratio = session_config['plane_bg_inratio'],
-                                             iters = session_config['plane_bg_iters'],
-                                             non_zero_ransac = session_config['plane_bg_nonzero'],
+                                             **session_config,
                                              **kwargs
                                              )
             # save for recall later
