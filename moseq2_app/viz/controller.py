@@ -201,11 +201,11 @@ class SyllableLabeler(SyllableLabelerWidgets):
             df, scalar_df = merge_labels_with_scalars(self.sorted_index, self.model_path)
             df = df.astype(dict(SubjectName=str, SessionName=str))
             print('Writing main syllable info to parquet')
-            df.to_parquet(self.df_output_file, engine='fastparquet', compression='gzip')
+            df.to_parquet(self.df_output_file, engine='pyarrow', compression='gzip')
             scalar_df.to_parquet(self.scalar_df_output, compression='gzip')
         else:
             print('Loading parquet files')
-            df = pd.read_parquet(self.df_output_file, engine='fastparquet')
+            df = pd.read_parquet(self.df_output_file, engine='pyarrow')
 
         # Get all unique groups in df
         self.groups = df.group.unique()
@@ -571,7 +571,7 @@ class CrowdMovieComparison(CrowdMovieCompareWidgets):
         '''
         if self.df_path is not None and os.path.exists(self.df_path):
             print('Loading parquet files')
-            df = pd.read_parquet(self.df_path, engine='fastparquet')
+            df = pd.read_parquet(self.df_path, engine='pyarrow')
             if not os.path.exists(self.scalar_df_path):
                 self.scalar_df = scalars_to_dataframe(self.sorted_index, model_path=self.model_path)
                 self.scalar_df.to_parquet(self.scalar_df_path, compression='gzip')

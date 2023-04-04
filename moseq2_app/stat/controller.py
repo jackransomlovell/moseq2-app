@@ -164,7 +164,7 @@ class InteractiveSyllableStats(SyllableStatWidgets):
         # otherwise, the DataFrame is computed from scratch
         if self.df_path is not None:
             print('Loading parquet files')
-            df = pd.read_parquet(self.df_path, engine='fastparquet')
+            df = pd.read_parquet(self.df_path, engine='pyarrow')
             if len(df.syllable.unique()) < self.max_sylls:
                 print('Requested more syllables than the parquet file holds, recomputing requested dataset.')
                 df, _ = merge_labels_with_scalars(self.sorted_index, self.model_path)
@@ -441,7 +441,7 @@ class InteractiveTransitionGraph(TransitionGraphWidgets):
 
             if self.df_path is not None:
                 print('Loading parquet files')
-                df = pd.read_parquet(self.df_path, engine='fastparquet')
+                df = pd.read_parquet(self.df_path, engine='pyarrow')
             else:
                 print('Syllable DataFrame not found. Creating new dataframe and computing syllable statistics...')
                 df, _ = merge_labels_with_scalars(self.sorted_index, self.model_path)
