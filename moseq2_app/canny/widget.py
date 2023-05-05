@@ -36,8 +36,6 @@ class CannyWidget:
     def __init__(self, data_dir, config_file, session_config_path, skip_extracted=False) -> None:
         self.backgrounds = {}
         self.extracts = {}
-        self.global_rois = {}
-        self.wall_rois = {}
         self.data_dir = data_dir
         self.session_config_path = session_config_path
 
