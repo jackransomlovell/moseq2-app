@@ -116,10 +116,6 @@ class CannyWidget:
         background = self.get_background(folder)
         session_config = self.session_config[folder]
 
-        # TODO: compute mask only if not already done
-        _, rois = self.compute_arena_mask()
-        mask = rois[self.session_data.mask_index]
-
         # get segmented frame
         raw_frames = load_movie_data(self.sessions[folder],
                                      range(1, self.session_data.frames_to_extract + 1),
@@ -168,12 +164,8 @@ class CannyData(param.Parameterized):
     '''The link between the widget view and the underlying data'''
     ### data ###
     path = param.ObjectSelector()  # stores the currently selected path and all others
-    # defines the range of depth values needed to compute mask for floor
-    depth_range = param.Range(default=(650, 750), bounds=(400, 1000), label="Floor depth range (mm)")
-    # defines how many iterations cv2.dilate should be run on mask computed for floor
-    mask_dilations = param.Integer(default=3, bounds=(0, 10), label="Floor mask dilation iterations")
     # defines thresholds used to locate mouse for extractions
-    mouse_height = param.Range(default=(10, 110), bounds=(0, 175), label="Mouse height clip (mm)")
+    mouse_height = param.Range(default=(10, 300), bounds=(0, 500), label="Rat height clip (mm)")
     # stores the extracted frame number to display and how many to extract in test
     frame_num = param.Integer(default=0, bounds=(0, 99), label="Display frame (index)")
     frames_to_extract = param.Integer(default=100, bounds=(1, None), label="Number of test frames to extract")
@@ -182,19 +174,6 @@ class CannyData(param.Parameterized):
                         'Extracted mouse': None, 'Frame (background subtracted)': None})
     # stores class object that holds the underlying data
     controller: CannyWidget = param.Parameter()
-
-    ### advanced arena mask parameters ###
-    adv_arena_msk_flag = param.Boolean(label="Show advanced arena mask parameters")
-    mask_shape = param.Selector(objects=['ellipse', 'rectangle'], default='ellipse', label='Dilation shape')
-    dilation_kernel = param.Integer(default=10, bounds=(3, 40), label="Diameter of mask dilation kernel")
-
-    mask_weight1 = param.Number(default=1.0, bounds=(0, None), label="Mask area")
-    mask_weight2 = param.Number(default=0.1, bounds=(0, None), label="Mask extent")
-    mask_weight3 = param.Number(default=1.0, bounds=(0, None), label="Mask distance from center")
-
-    mask_index = param.Integer(default=0, bounds=(0, None), label="Mask index")
-
-    noise_tolerance = param.Number(default=30.0, bounds=(0, None), label="RANSAC noise tolerance")
 
     ### advanced extraction parameters ###
     adv_extraction_flag = param.Boolean(label="Show advanced extraction parameters")
@@ -217,17 +196,14 @@ class CannyData(param.Parameterized):
     temporal_filter = param.String(default="[0]", label="Temporal filter(s)")
 
     chunk_overlap = param.Integer(default=0, bounds=(0, None), label="Extraction chunk overlap (useful for tracking model)")
-    frame_dtype = param.Selector(default="uint8", objects=["uint8", "uint16"], label="Output extraction datatype")
+    frame_dtype = param.Selector(default="uint16", objects=["uint8", "uint16"], label="Output extraction datatype")
     # NOTE: in the past this has been <i2, so might change some people's analysis
     movie_dtype = param.String(default="<u2", label="Raw depth video datatype (for .dat files)")
     pixel_format = param.Selector(default="gray16le", objects=["gray16le", "gray16be"], label="Raw depth video datatype (for .avi or .mkv files)")
     compress = param.Boolean(default=False, label="Compress raw data after extraction")
 
     ### flags and actions ###
-    computing_arena = param.Boolean(default=False)  # used to indicate a computation is being performed
     computing_extraction = param.Boolean(default=False)  # used to indicate a computation is being performed
-    # used to trigger the computation of the arena mask via a button
-    compute_arena_mask = param.Action(lambda x: x.param.trigger('compute_arena_mask'), label="Compute arena mask")
     # used to trigger the computation of a small extraction via a button
     compute_extraction = param.Action(lambda x: x.param.trigger('compute_extraction'), label="Compute extraction")
     save_session_and_move_btn = param.Action(lambda x: x.param.trigger('save_session_and_move_btn'), label="Save session parameters and move to next")
@@ -247,16 +223,6 @@ class CannyData(param.Parameterized):
         except ValueError:
             self.path = paths[0]
 
-    @param.depends('compute_arena_mask', 'next_session', watch=True)
-    def get_arena_mask(self):
-        self.computing_arena = True
-        background, mask = self.controller.compute_arena_mask()
-        self.images['Arena mask'] = mask
-        self.images['Background'] = background
-        self.param.mask_index.bounds = (0, len(mask) - 1)
-
-        self.computing_arena = False
-
     @param.depends('compute_extraction', 'next_session', watch=True)
     def get_extraction(self):
         self.computing_extraction = True
@@ -270,7 +236,7 @@ class CannyData(param.Parameterized):
     def change_frame_slider(self):
         self.param.frame_num.bounds = (0, min(self.frames_to_extract - 1, len(self.images['Extracted mouse']) - 1))
 
-    @param.depends('get_arena_mask', 'get_extraction', 'frame_num', 'mask_index')
+    @param.depends('get_extraction', 'frame_num', 'mask_index')
     def display(self):
         panels = []
         for k, v in self.images.items():
@@ -280,10 +246,6 @@ class CannyData(param.Parameterized):
                 _img = v[min(len(v) - 1, self.frame_num)]
                 im = hv.Image(_img, label=k, bounds=(0, 0, v.shape[2], v.shape[1])
                               ).opts(xlim=(0, v.shape[2]), ylim=(0, v.shape[1]), framewise=True)
-            elif k == 'Arena mask':
-                _img = v[self.mask_index]
-                im = hv.Image(_img, label=k, bounds=(0, 0, _img.shape[1], _img.shape[0])
-                              ).opts(xlim=(0, _img.shape[1]), ylim=(0, _img.shape[0]), framewise=True)
             else:
                 im = hv.Image(v, label=k, bounds=(
                     0, 0, *v.shape[::-1])).opts(xlim=(0, v.shape[1]), ylim=(0, v.shape[0]), framewise=True)
@@ -311,39 +273,6 @@ class CannyView(Viewer):
 
         ### subsection: session selector ###
         session_selector = _link_data(pn.widgets.Select, "path", size=4, name="")
-
-        ### subsection: arena mask parameters ###
-        arena_depth_range = _link_data(pn.widgets.IntRangeSlider, "depth_range", step=5)
-        mask_dilate_iters = _link_data(pn.widgets.IntSlider, "mask_dilations", step=1)
-        compute_mask_btn = _link_data(pn.widgets.Button, "compute_arena_mask")
-        show_adv_arena_msk = _link_data(pn.widgets.Checkbox, "adv_arena_msk_flag")
-
-        ### subsection: optional advanced arena mask parameters ###
-
-        mask_shape = _link_data(pn.widgets.Select, "mask_shape", height=40)
-        dilation_kernel = _link_data(pn.widgets.IntSlider, "dilation_kernel", step=1, height=40)
-
-        mask_weight1 = _link_data(pn.widgets.NumberInput, "mask_weight1", height=45)
-        mask_weight2 = _link_data(pn.widgets.NumberInput, "mask_weight2", height=45)
-        mask_weight3 = _link_data(pn.widgets.NumberInput, "mask_weight3", height=45)
-
-        mask_index = _link_data(pn.widgets.IntInput, "mask_index", height=45)
-        noise_tolerance = _link_data(pn.widgets.NumberInput, "noise_tolerance", height=45)
-
-        adv_arena_mask = pn.Column(
-            mask_index,
-            mask_shape,
-            dilation_kernel,
-            noise_tolerance,
-            pn.pane.Markdown("#### Mask weightings", height=20, width=140),
-            mask_weight1,
-            mask_weight2,
-            mask_weight3,
-            visible=False,
-            scroll=True,
-            height=175
-        )
-        show_adv_arena_msk.link(adv_arena_mask, value='visible')
 
         ### subsection: extraction parameters ###
         clip_mouse_height = _link_data(pn.widgets.IntRangeSlider, "mouse_height")
@@ -409,18 +338,8 @@ class CannyView(Viewer):
         save_session_and_move_btn = _link_data(pn.widgets.Button, "save_session_and_move_btn")
         save_session_btn = _link_data(pn.widgets.Button, "save_session_btn")
 
-        # computing arena indicator
-        indicator = pn.Row(
-            pn.pane.Markdown('Finding arena...', width=100),
-            pn.widgets.Progress(active=True, bar_color='warning', width=160),
-            visible=False,
-            height=45,
-        )
-        computing_check = _link_data(pn.widgets.Checkbox, "computing_arena", value=False, visible=False)
-        computing_check.link(indicator, value='visible')
         def _link_button_visibility(target, event):
             target.visible = not event.new
-        computing_check.link(compute_mask_btn, callbacks={'value': _link_button_visibility})
 
         # computing extraction
         indicator2 = pn.Row(
@@ -439,13 +358,6 @@ class CannyView(Viewer):
         self.gui_col = pn.Column(
             '### Sessions',
             session_selector,
-            '### Arena floor mask parameters',
-            arena_depth_range,
-            mask_dilate_iters,
-            compute_mask_btn,
-            indicator,
-            show_adv_arena_msk,
-            adv_arena_mask,
             '### Extraction parameters',
             clip_mouse_height,
             extraction_frame_num,
