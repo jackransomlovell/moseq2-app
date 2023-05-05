@@ -172,7 +172,7 @@ class CannyData(param.Parameterized):
     frame_num = param.Integer(default=0, bounds=(0, 99), label="Display frame (index)")
     frames_to_extract = param.Integer(default=100, bounds=(1, None), label="Number of test frames to extract")
     # stores images of the arena and extractions
-    images = param.Dict(default={'Background': None, 'Arena mask': None,
+    images = param.Dict(default={'Background': None, 'Wall ROI': None, 'Global ROI': None,
                         'Extracted mouse': None, 'Frame (background subtracted)': None})
     # stores class object that holds the underlying data
     controller: CannyWidget = param.Parameter()
@@ -210,6 +210,8 @@ class CannyData(param.Parameterized):
     compute_extraction = param.Action(lambda x: x.param.trigger('compute_extraction'), label="Compute extraction")
     save_session_and_move_btn = param.Action(lambda x: x.param.trigger('save_session_and_move_btn'), label="Save session parameters and move to next")
     save_session_btn = param.Action(lambda x: x.param.trigger('save_session_btn'), label="Save session parameters")
+    load_rois = param.Action(lambda x: x.param.trigger('load_rois'), label="Load backgrounds for ROI drawing")
+    draw_rois = param.Action(lambda x: x.param.trigger('draw_rois'), label="Draw ROI")
 
     ### canny algo params
     canny_t1 = param.Integer(default=100, bounds=(0, 255), label="Canny t1")
@@ -359,6 +361,8 @@ class CannyView(Viewer):
         canny_t2 = _link_data(pn.widgets.IntInput, "canny_t2", height=40)
         otsu = _link_data(pn.widgets.Checkbox, "otsu", height=15)
         final_dilation = _link_data(pn.widgets.IntInput, "final_dilation", height=40)
+        load_rois_btn = _link_data(pn.widgets.Button, "load_rois")
+        draw_rois_btn = _link_data(pn.widgets.Button, "draw_rois")
 
         adv_extraction = pn.Column(
             crop_size,
@@ -423,6 +427,8 @@ class CannyView(Viewer):
             extraction_frame_num,
             display_frame_num,
             compute_extraction_btn,
+            load_rois_btn,
+            draw_rois_btn,
             indicator2,
             show_adv_extraction,
             adv_extraction,
