@@ -127,14 +127,16 @@ class CannyWidget:
         frames = (background - raw_frames)
 
         # filter for included mouse height range
-        frames = threshold_chunk(frames, session_config['min_height'], session_config['max_height'])*self.global_rois[folder]
+        global_roi = self.session_data.images['Global ROI']
+        frames = threshold_chunk(frames, session_config['min_height'], session_config['max_height'])*global_roi
 
-        floor_roi = (~self.wall_rois[folder].astype(bool)).astype(np.uint8)
+        wall_roi = self.session_data.images['Wall ROI']
+        floor_roi = (~wall_roi.astype(bool)).astype(np.uint8)
 
         msks = []
         for i in range(frames.shape[0]):
             msk = get_canny_msk(frames,
-                                self.wall_rois[folder],
+                                wall_roi,
                                 floor_roi, 
                                 session_config['t1'], session_config['t2'],
                                 tail_size=session_config['tail_size'], 
@@ -161,21 +163,6 @@ class CannyWidget:
 
         return self.backgrounds[folder]
     
-    def get_rois(self, folder=None):
-        '''Assuming this will be called by an event-triggered function'''
-        if folder is None:
-            folder = self.session_data.path
-        if folder not in self.glob_rois:
-            # save for recall later
-            self.global_rois[folder] = self.session_data.images['Global ROI']
-        if folder not in self.wall_rois:
-            # save for recall later
-            self.wall_rois[folder] = self.session_data.images['Wall ROI']
-        if folder not in self.floor_rois:
-            # save for recall later
-            self.floor_rois[folder] = self.session_data.images['Floor ROI']
-        return self.global_rois[folder], self.floor_rois[folder], self.wall_rois[folder]
-
 # define data class first
 class CannyData(param.Parameterized):
     '''The link between the widget view and the underlying data'''
