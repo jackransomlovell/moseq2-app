@@ -137,7 +137,7 @@ class CannyWidget:
                                 wall_roi,
                                 floor_roi, 
                                 session_config['t1'], session_config['t2'],
-                                tail_size=session_config['tail_size'], 
+                                tail_size=session_config['tail_filter_size'], 
                                 otsu=session_config['otsu'],
                                 final_dilate=session_config['final_dilate'])
             msks.append(msk)
@@ -210,6 +210,12 @@ class CannyData(param.Parameterized):
     compute_extraction = param.Action(lambda x: x.param.trigger('compute_extraction'), label="Compute extraction")
     save_session_and_move_btn = param.Action(lambda x: x.param.trigger('save_session_and_move_btn'), label="Save session parameters and move to next")
     save_session_btn = param.Action(lambda x: x.param.trigger('save_session_btn'), label="Save session parameters")
+
+    ### canny algo params
+    canny_t1 = param.Integer(default=100, bounds=(0, 255), label="Canny t1")
+    canny_t2 = param.Integer(default=200, bounds=(0, 255), label="Canny t2")
+    otsu = param.Boolean(default=False, label="Use Otsu thresholding")
+    final_dilate = param.Integer(default=0, bounds=(0, None), label="Final dilation iterations")
 
     @param.depends('save_session_btn', 'save_session_and_move_btn', watch=True)
     def save_session(self):
@@ -348,6 +354,12 @@ class CannyView(Viewer):
         pixel_format = _link_data(pn.widgets.Select, "pixel_format", height=40)
         compress = _link_data(pn.widgets.Checkbox, "compress", height=15)
 
+        ### subsection: ROI selection ###
+        canny_t1 = _link_data(pn.widgets.IntInput, "canny_t1", height=40)
+        canny_t2 = _link_data(pn.widgets.IntInput, "canny_t2", height=40)
+        otsu = _link_data(pn.widgets.Checkbox, "otsu", height=15)
+        final_dilation = _link_data(pn.widgets.IntInput, "final_dilation", height=40)
+
         adv_extraction = pn.Column(
             crop_size,
             flip_classifier_smoothing,
@@ -371,10 +383,15 @@ class CannyView(Viewer):
             cable_filters,
             cable_filter_shape,
             cable_filter_size,
+            pn.pane.Markdown("#### Canny algo parameters", height=20, width=300),
+            canny_t1,
+            canny_t2,
+            otsu,
+            final_dilation,
             visible=False,
             scroll=True,
-            height=175
-        )
+            height=200
+            )
         show_adv_extraction.link(adv_extraction, value='visible')
 
         ### subsection: saving and indicator ###
