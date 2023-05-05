@@ -36,7 +36,7 @@ class CannyWidget:
     def __init__(self, data_dir, config_file, session_config_path, skip_extracted=False) -> None:
         self.backgrounds = {}
         self.extracts = {}
-        self.glob_rois = {}
+        self.global_rois = {}
         self.wall_rois = {}
         self.data_dir = data_dir
         self.session_config_path = session_config_path
@@ -127,13 +127,15 @@ class CannyWidget:
         frames = (background - raw_frames)
 
         # filter for included mouse height range
-        frames = threshold_chunk(frames, session_config['min_height'], session_config['max_height'])*self.session_data.global_roi
+        frames = threshold_chunk(frames, session_config['min_height'], session_config['max_height'])*self.global_rois[folder]
+
+        floor_roi = (~self.wall_rois[folder].astype(bool)).astype(np.uint8)
 
         msks = []
         for i in range(frames.shape[0]):
             msk = get_canny_msk(frames,
-                                self.session_data.wall_msk,
-                                self.session_data.floor_msk, 
+                                self.wall_rois[folder],
+                                floor_roi, 
                                 session_config['t1'], session_config['t2'],
                                 tail_size=session_config['tail_size'], 
                                 otsu=session_config['otsu'],
@@ -159,18 +161,20 @@ class CannyWidget:
 
         return self.backgrounds[folder]
     
-    def get_global_roi(self, folder=None):
+    def get_rois(self, folder=None):
         '''Assuming this will be called by an event-triggered function'''
         if folder is None:
             folder = self.session_data.path
         if folder not in self.glob_rois:
-            # get background
-            bground = self.get_background(folder)
-
             # save for recall later
-            self.global_rois[folder] = global_roi
-
-        return self.global_rois[folder]
+            self.global_rois[folder] = self.session_data.images['Global ROI']
+        if folder not in self.wall_rois:
+            # save for recall later
+            self.wall_rois[folder] = self.session_data.images['Wall ROI']
+        if folder not in self.floor_rois:
+            # save for recall later
+            self.floor_rois[folder] = self.session_data.images['Floor ROI']
+        return self.global_rois[folder], self.floor_rois[folder], self.wall_rois[folder]
 
 # define data class first
 class CannyData(param.Parameterized):
@@ -252,13 +256,15 @@ class CannyData(param.Parameterized):
     @param.depends('load_rois', watch=True)
     def load_roi(self):
         bground = self.controller.get_background()
-        self.images['Gloabal ROI'] = bground
+        self.images['Global ROI'] = bground
         self.images['Wall ROI'] = bground
 
     @param.depends('draw_rois', watch=True)
     def draw_roi(self):
 
         for k,v in self.images():
+            if k not in ['Global ROI', 'Wall ROI']:
+                continue
 
             bground = v
             x=(int(min(self.poly_stream[k].data['xs'][0])),int(max(self.poly_stream[k].data['xs'][0])))
@@ -270,7 +276,6 @@ class CannyData(param.Parameterized):
 
             self.images[k] = roi
         
-
     @param.depends('get_extraction', 'frame_num', 'load_rois', 'draw_rois')
     def display(self):
         panels = []
