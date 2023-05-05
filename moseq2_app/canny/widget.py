@@ -27,7 +27,6 @@ from moseq2_extract.extract.proc import threshold_chunk, get_canny_msk, get_bgro
 # contains display parameters for the bokeh hover tools
 _hover_dict = {
     'Background': HoverTool(tooltips=[('Distance from camera (mm)', '@image')]),
-    'Arena mask': HoverTool(tooltips=[('Mask', '@image')]),
     'Extracted mouse': HoverTool(tooltips=[('Height from floor (mm)', '@image')]),
     'Frame (background subtracted)': HoverTool(tooltips=[('Height from floor (mm)', '@image')]),
 }
@@ -37,6 +36,8 @@ class CannyWidget:
     def __init__(self, data_dir, config_file, session_config_path, skip_extracted=False) -> None:
         self.backgrounds = {}
         self.extracts = {}
+        self.glob_rois = {}
+        self.wall_rois = {}
         self.data_dir = data_dir
         self.session_config_path = session_config_path
 
@@ -157,7 +158,19 @@ class CannyWidget:
             self.backgrounds[folder] = bground
 
         return self.backgrounds[folder]
+    
+    def get_global_roi(self, folder=None):
+        '''Assuming this will be called by an event-triggered function'''
+        if folder is None:
+            folder = self.session_data.path
+        if folder not in self.glob_rois:
+            # get background
+            bground = self.get_background(folder)
 
+            # save for recall later
+            self.global_rois[folder] = global_roi
+
+        return self.global_rois[folder]
 
 # define data class first
 class CannyData(param.Parameterized):
@@ -236,7 +249,29 @@ class CannyData(param.Parameterized):
     def change_frame_slider(self):
         self.param.frame_num.bounds = (0, min(self.frames_to_extract - 1, len(self.images['Extracted mouse']) - 1))
 
-    @param.depends('get_extraction', 'frame_num', 'mask_index')
+    @param.depends('load_rois', watch=True)
+    def load_roi(self):
+        bground = self.controller.get_background()
+        self.images['Gloabal ROI'] = bground
+        self.images['Wall ROI'] = bground
+
+    @param.depends('draw_rois', watch=True)
+    def draw_roi(self):
+
+        for k,v in self.images():
+
+            bground = v
+            x=(int(min(self.poly_stream[k].data['xs'][0])),int(max(self.poly_stream[k].data['xs'][0])))
+            tmp=(int(min(self.poly_stream[k].data['ys'][0])),int(max(self.poly_stream[k].data['ys'][0])))
+            y=(bground.shape[0]-tmp[1],bground.shape[0]-tmp[0])
+
+            roi = np.zeros(bground.shape, dtype=np.uint8)
+            roi[y[0]:y[1], x[0]:x[1]] = 1
+
+            self.images[k] = roi
+        
+
+    @param.depends('get_extraction', 'frame_num', 'load_rois', 'draw_rois')
     def display(self):
         panels = []
         for k, v in self.images.items():
@@ -246,6 +281,24 @@ class CannyData(param.Parameterized):
                 _img = v[min(len(v) - 1, self.frame_num)]
                 im = hv.Image(_img, label=k, bounds=(0, 0, v.shape[2], v.shape[1])
                               ).opts(xlim=(0, v.shape[2]), ylim=(0, v.shape[1]), framewise=True)
+            elif k in ('Global ROI', 'Wall ROI'):
+                bground = v
+                vmin = 750
+                vmax = bground.max()
+
+                img = hv.Image(bground, 
+                               bounds = (0, bground.shape[0], bground.shape[1], 0)).opts(width=512,
+                                                                                         height=424,
+                                                                                         clim=(vmin, vmax))
+                poly = hv.Polygons([])
+                self.poly_stream[k] = hv.streams.PolyDraw(source=poly, drag=True, num_objects=4,
+                                                          show_vertices=True, styles={
+                                                              'fill_color': ['red', 'green']
+                                                              })
+
+                im = (img * poly).opts(
+                    hv.opts.Path(color='red', height=400, line_width=5, width=400),
+                    hv.opts.Polygons(fill_alpha=0.3, active_tools=['poly_draw']))
             else:
                 im = hv.Image(v, label=k, bounds=(
                     0, 0, *v.shape[::-1])).opts(xlim=(0, v.shape[1]), ylim=(0, v.shape[0]), framewise=True)
