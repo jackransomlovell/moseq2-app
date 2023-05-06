@@ -12,7 +12,7 @@ from copy import deepcopy
 from tqdm.auto import tqdm
 from functools import reduce
 from panel.viewable import Viewer
-from bokeh.models import HoverTool
+from bokeh.models import HoverTool, Toolbar
 from os.path import exists, basename, dirname
 from moseq2_app.gui.progress import get_sessions
 from moseq2_extract.io.video import load_movie_data
@@ -22,11 +22,12 @@ from moseq2_extract.util import detect_and_set_camera_parameters
 from moseq2_app.util import write_yaml, read_yaml, read_and_clean_config, update_config
 from moseq2_extract.extract.proc import threshold_chunk, get_canny_msk, get_bground_im_file
 
+hv.extension('bokeh')
+
 
 
 # contains display parameters for the bokeh hover tools
 _hover_dict = {
-    'Background': HoverTool(tooltips=[('Distance from camera (mm)', '@image')]),
     'Extracted mouse': HoverTool(tooltips=[('Height from floor (mm)', '@image')]),
     'Frame (background subtracted)': HoverTool(tooltips=[('Height from floor (mm)', '@image')]),
 }
@@ -75,6 +76,8 @@ class CannyWidget:
         # instantiate CannyData with the first session in this list
         self.session_data = CannyData(path=list(self.sessions)[0], controller=self)
         self.session_data.param.path.objects = list(self.sessions)  # generates object selector in gui
+        
+        self.session_data.load_roi()
 
         self.view = CannyView(self.session_data)
 
@@ -172,8 +175,9 @@ class CannyData(param.Parameterized):
     frame_num = param.Integer(default=0, bounds=(0, 99), label="Display frame (index)")
     frames_to_extract = param.Integer(default=100, bounds=(1, None), label="Number of test frames to extract")
     # stores images of the arena and extractions
-    images = param.Dict(default={'Background': None, 'Wall ROI': None, 'Global ROI': None,
+    images = param.Dict(default={'Global ROI': None, 'Wall ROI': None,
                         'Extracted mouse': None, 'Frame (background subtracted)': None})
+    poly_streams = param.Dict(default={})
     # stores class object that holds the underlying data
     controller: CannyWidget = param.Parameter()
 
@@ -217,7 +221,7 @@ class CannyData(param.Parameterized):
     canny_t1 = param.Integer(default=100, bounds=(0, 255), label="Canny t1")
     canny_t2 = param.Integer(default=200, bounds=(0, 255), label="Canny t2")
     otsu = param.Boolean(default=False, label="Use Otsu thresholding")
-    final_dilate = param.Integer(default=0, bounds=(0, None), label="Final dilation iterations")
+    final_dilation = param.Integer(default=0, bounds=(0, None), label="Final dilation iterations")
 
     @param.depends('save_session_btn', 'save_session_and_move_btn', watch=True)
     def save_session(self):
@@ -255,13 +259,13 @@ class CannyData(param.Parameterized):
     @param.depends('draw_rois', watch=True)
     def draw_roi(self):
 
-        for k,v in self.images():
+        for k,v in self.images.items():
             if k not in ['Global ROI', 'Wall ROI']:
                 continue
 
             bground = v
-            x=(int(min(self.poly_stream[k].data['xs'][0])),int(max(self.poly_stream[k].data['xs'][0])))
-            tmp=(int(min(self.poly_stream[k].data['ys'][0])),int(max(self.poly_stream[k].data['ys'][0])))
+            x=(int(min(self.poly_streams[k].data['xs'][0])),int(max(self.poly_streams[k].data['xs'][0])))
+            tmp=(int(min(self.poly_streams[k].data['ys'][0])),int(max(self.poly_streams[k].data['ys'][0])))
             y=(bground.shape[0]-tmp[1],bground.shape[0]-tmp[0])
 
             roi = np.zeros(bground.shape, dtype=np.uint8)
@@ -269,7 +273,7 @@ class CannyData(param.Parameterized):
 
             self.images[k] = roi
         
-    @param.depends('get_extraction', 'frame_num', 'load_rois', 'draw_rois')
+    @param.depends('get_extraction', 'frame_num', 'load_roi', 'draw_roi')
     def display(self):
         panels = []
         for k, v in self.images.items():
@@ -280,34 +284,30 @@ class CannyData(param.Parameterized):
                 im = hv.Image(_img, label=k, bounds=(0, 0, v.shape[2], v.shape[1])
                               ).opts(xlim=(0, v.shape[2]), ylim=(0, v.shape[1]), framewise=True)
             elif k in ('Global ROI', 'Wall ROI'):
-                bground = v
-                vmin = 750
-                vmax = bground.max()
-
-                img = hv.Image(bground, 
-                               bounds = (0, bground.shape[0], bground.shape[1], 0)).opts(width=512,
-                                                                                         height=424,
-                                                                                         clim=(vmin, vmax))
+                img = hv.Image(v, label=k, bounds=(0, 0, v.shape[1], v.shape[0])
+                              ).opts(xlim=(0, v.shape[1]), ylim=(0, v.shape[0]), framewise=True)
                 poly = hv.Polygons([])
-                self.poly_stream[k] = hv.streams.PolyDraw(source=poly, drag=True, num_objects=4,
-                                                          show_vertices=True, styles={
-                                                              'fill_color': ['red', 'green']
-                                                              })
+                self.poly_streams[k] = hv.streams.PolyDraw(source=poly, drag=True, num_objects=4,
+                                                           show_vertices=True, styles={'fill_color': ['red']})
 
                 im = (img * poly).opts(
-                    hv.opts.Path(color='red', height=400, line_width=5, width=400),
-                    hv.opts.Polygons(fill_alpha=0.3, active_tools=['poly_draw']))
+                    hv.opts.Path(active_tools=['poly_draw']),
+                    hv.opts.Polygons(fill_alpha=0.3, active_tools=['poly_draw']))        
             else:
                 im = hv.Image(v, label=k, bounds=(
                     0, 0, *v.shape[::-1])).opts(xlim=(0, v.shape[1]), ylim=(0, v.shape[0]), framewise=True)
-            panels.append(im.opts(
-                hv.opts.Image(
-                    tools=[_hover_dict[k]],
-                    cmap='cubehelix',
-                    xlabel="Width (pixels)",
-                    ylabel="Height (pixels)",
-                ),
-            ))
+            if k not in ('Global ROI', 'Wall ROI'):
+                panels.append(im.opts(
+                    hv.opts.Image(
+                        tools=[_hover_dict[k]],
+                        cmap='cubehelix',
+                        xlabel="Width (pixels)",
+                        ylabel="Height (pixels)",
+                    ),
+                ))
+            else:
+                panels.append(im)
+
         panels = reduce(add, panels).opts(hv.opts.Image()).cols(2)
         return panels.opts(shared_axes=False, framewise=True)
 
@@ -438,7 +438,11 @@ class CannyView(Viewer):
         )
 
         # define widget containing plots of arena and extraction
-        self.plotting_col = hv.DynamicMap(session_data.display).opts(framewise=True)
+
+        # Create a Toolbar object with the PolyDraw tool
+        toolbar = Toolbar(tools=list(session_data.poly_streams.values()))
+
+        self.plotting_col = hv.DynamicMap(session_data.display, streams = list(session_data.poly_streams.values())).opts(framewise=True, toolbar=toolbar)
 
         self._layout = pn.Row(self.gui_col, self.plotting_col)
 
