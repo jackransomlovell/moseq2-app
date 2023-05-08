@@ -109,8 +109,8 @@ class CannyWidget:
         self.set_session_config_vars()
 
         # save ROIs
-        np.save(self.session_config['floor_roi_path'], self.session_data.images['Floor ROI'])
-        np.save(self.session_config['global_roi_path'], self.session_data.images['Global ROI'])
+        np.save(self.session_config[self.session_data.path]['floor_roi_path'], self.session_data.images['Floor ROI'])
+        np.save(self.session_config[self.session_data.path]['global_roi_path'], self.session_data.images['Global ROI'])
 
         # write yaml
         write_yaml(self.session_config, self.session_config_path)
@@ -135,14 +135,15 @@ class CannyWidget:
         global_roi = self.session_data.images['Global ROI']
         frames = threshold_chunk(frames, session_config['min_height'], session_config['max_height'])*global_roi
 
-        wall_roi = (~self.session_data.images['Floor ROI'].astype(bool)).astype(np.uint8)
+        wall_roi = (~self.session_data.images['Floor ROI'].astype(bool)).astype(np.uint16)
 
         msks = []
         for i in range(frames.shape[0]):
             msk = get_canny_msk(frames[i],
                                 wall_roi,
                                 self.session_data.images['Floor ROI'], 
-                                session_config['canny_t1'], session_config['canny_t2'],
+                                session_config['canny_t1'], 
+                                session_config['canny_t2'],
                                 tail_size=session_config['tail_filter_size'], 
                                 otsu=session_config['otsu'],
                                 final_dilate=(session_config['final_dilation'],)*2)
@@ -186,7 +187,7 @@ class CannyData(param.Parameterized):
 
     ### advanced extraction parameters ###
     adv_extraction_flag = param.Boolean(label="Show advanced extraction parameters")
-    crop_size = param.Integer(default=80, bounds=(1, None), label="Crop size (width and height; pixels)")
+    crop_size = param.Integer(default=160, bounds=(1, None), label="Crop size (width and height; pixels)")
     flip_classifier = param.Selector(label='Flip classifier')  # TODO: fill this one out better
     flip_classifier_smoothing = param.Integer(default=51, bounds=(1, None), label="Flip classifier smoothing (frames)")
 
@@ -291,7 +292,7 @@ class CannyData(param.Parameterized):
             tmp=(int(min(self.poly_streams[k].data['ys'][0])),int(max(self.poly_streams[k].data['ys'][0])))
             y=(bground.shape[0]-tmp[1],bground.shape[0]-tmp[0])
 
-            roi = np.zeros(bground.shape, dtype=np.uint8)
+            roi = np.zeros(bground.shape, dtype=np.uint16)
             roi[y[0]:y[1], x[0]:x[1]] = 1
 
             self.images[k] = roi
