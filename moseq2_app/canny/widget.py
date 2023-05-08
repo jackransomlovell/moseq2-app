@@ -93,8 +93,6 @@ class CannyWidget:
         session['canny_t1'] = self.session_data.canny_t1
         session['canny_t2'] = self.session_data.canny_t2
 
-        session['tail_filter_iters'] = self.session_data.tail_filters
-        session['tail_filter_shape'] = self.session_data.tail_filter_shape
         session['tail_filter_size'] = (self.session_data.tail_filter_size, ) * 2
 
         session['otsu'] = self.session_data.otsu
@@ -104,13 +102,15 @@ class CannyWidget:
         session['min_height'] = self.session_data.mouse_height[0]
         session['max_height'] = self.session_data.mouse_height[1]
 
+        session['floor_roi_path'] = join(self.data_dir, self.session_data.path, 'proc/floor_roi.npy')
+        session['global_roi_path'] = join(self.data_dir, self.session_data.path, 'proc/global_roi.npy')
+
     def save_session_parameters(self):
         self.set_session_config_vars()
 
         # save ROIs
-        pdir = join(self.data_dir, self.session_data.path, 'proc')
-        np.save(join(pdir, 'floor_roi.npy'), self.session_data.images['Floor ROI'])
-        np.save(join(pdir, 'global_roi.npy'), self.session_data.images['Global ROI'])
+        np.save(self.session_config['floor_roi_path'], self.session_data.images['Floor ROI'])
+        np.save(self.session_config['global_roi_path'], self.session_data.images['Global ROI'])
 
         # write yaml
         write_yaml(self.session_config, self.session_config_path)
