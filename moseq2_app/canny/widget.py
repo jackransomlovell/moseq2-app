@@ -12,8 +12,8 @@ from copy import deepcopy
 from tqdm.auto import tqdm
 from functools import reduce
 from panel.viewable import Viewer
-from bokeh.models import HoverTool, Toolbar
-from os.path import exists, basename, dirname
+from bokeh.models import HoverTool
+from os.path import exists, basename, dirname, join
 from moseq2_app.gui.progress import get_sessions
 from moseq2_extract.io.video import load_movie_data
 from moseq2_extract.util import select_strel, get_strels
@@ -105,10 +105,15 @@ class CannyWidget:
         session['min_height'] = self.session_data.mouse_height[0]
         session['max_height'] = self.session_data.mouse_height[1]
 
-
     def save_session_parameters(self):
         self.set_session_config_vars()
 
+        # save ROIs
+        pdir = join(self.data_dir, self.session_data.path, 'proc')
+        np.save(join(pdir, 'floor_roi.npy'), self.session_data.images['Floor ROI'])
+        np.save(join(pdir, 'global_roi.npy'), self.session_data.images['Global ROI'])
+
+        # write yaml
         write_yaml(self.session_config, self.session_config_path)
 
     def compute_extraction(self):
@@ -131,14 +136,13 @@ class CannyWidget:
         global_roi = self.session_data.images['Global ROI']
         frames = threshold_chunk(frames, session_config['min_height'], session_config['max_height'])*global_roi
 
-        floor_roi = self.session_data.images['Floor ROI']
-        wall_roi = (~floor_roi.astype(bool)).astype(np.uint8)
+        wall_roi = (~self.session_data.images['Floor ROI'].astype(bool)).astype(np.uint8)
 
         msks = []
         for i in range(frames.shape[0]):
             msk = get_canny_msk(frames[i],
                                 wall_roi,
-                                floor_roi, 
+                                self.session_data.images['Floor ROI'], 
                                 session_config['canny_t1'], session_config['canny_t2'],
                                 tail_size=session_config['tail_filter_size'], 
                                 otsu=session_config['otsu'],
