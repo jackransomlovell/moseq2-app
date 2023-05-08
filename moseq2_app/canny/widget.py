@@ -271,10 +271,15 @@ class CannyData(param.Parameterized):
         panels = reduce(add, panels).opts(hv.opts.Image()).cols(2)
         return panels.opts(shared_axes=False, framewise=True)
 
-    def load_roi(self):
-        bground = self.controller.get_background()
-        self.images['Global ROI'] = bground
-        self.images['Floor ROI'] = bground
+    def load_roi(self, paths=None):
+
+        if paths is not None:
+            self.images['Global ROI'] = np.load(paths['Global ROI'], allow_pickle=True)
+            self.images['Floor ROI'] = np.load(paths['Floor ROI'], allow_pickle=True)
+        else:
+            bground = self.controller.get_background()
+            self.images['Global ROI'] = bground
+            self.images['Floor ROI'] = bground
 
     def draw_roi(self):
 
@@ -298,10 +303,14 @@ class CannyData(param.Parameterized):
         for k, v in self.images.items():
             if not isinstance(v, (np.ndarray, list)):
                 im = hv.Image([], label=k)
-            elif k in ('Extracted mouse', 'Frame (background subtracted)'):
+            elif k  == 'Frame (background subtracted)':
                 _img = v[min(len(v) - 1, self.frame_num)]
                 im = hv.Image(_img, label=k, bounds=(0, 0, v.shape[2], v.shape[1])
                               ).opts(xlim=(0, v.shape[2]), ylim=(0, v.shape[1]), framewise=True)
+            elif k == 'Extracted mouse':
+                _img = v[min(len(v) - 1, self.frame_num)]
+                im = hv.Image(_img, label=k, bounds=(0, 0, self.crop_size, self.crop_size)
+                              ).opts(xlim=(0, self.crop_size), ylim=(0, self.crop_size), framewise=True)
             else:
                 im = hv.Image(v, label=k, bounds=(
                     0, 0, *v.shape[::-1])).opts(xlim=(0, v.shape[1]), ylim=(0, v.shape[0]), framewise=True)
@@ -446,9 +455,6 @@ class CannyView(Viewer):
         )
 
         # define widget containing plots of arena and extraction
-
-        # Create a Toolbar object with the PolyDraw tool
-
         self.plotting_col = hv.DynamicMap(session_data.display).opts(framewise=True)
 
         self._layout = pn.Row(self.gui_col, self.plotting_col)
