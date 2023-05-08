@@ -91,8 +91,8 @@ class CannyWidget:
         session = self.session_config[folder]
 
         # canny thresholds
-        session['t1'] = self.session_data.t1
-        session['t2'] = self.session_data.t2
+        session['canny_t1'] = self.session_data.canny_t1
+        session['canny_t2'] = self.session_data.canny_t2
 
         session['tail_filter_iters'] = self.session_data.tail_filters
         session['tail_filter_shape'] = self.session_data.tail_filter_shape
@@ -100,10 +100,10 @@ class CannyWidget:
 
         session['otsu'] = self.session_data.otsu
 
-        session['final_dilate'] = self.session_data.final_dilate
+        session['final_dilation'] = self.session_data.final_dilation
 
-        session['min_height'] = self.session_data.min_height
-        session['max_height'] = self.session_data.max_height
+        session['min_height'] = self.session_data.mouse_height[0]
+        session['max_height'] = self.session_data.mouse_height[1]
 
 
     def save_session_parameters(self):
@@ -131,18 +131,18 @@ class CannyWidget:
         global_roi = self.session_data.images['Global ROI']
         frames = threshold_chunk(frames, session_config['min_height'], session_config['max_height'])*global_roi
 
-        wall_roi = self.session_data.images['Wall ROI']
-        floor_roi = (~wall_roi.astype(bool)).astype(np.uint8)
+        floor_roi = self.session_data.images['Floor ROI']
+        wall_roi = (~floor_roi.astype(bool)).astype(np.uint8)
 
         msks = []
         for i in range(frames.shape[0]):
-            msk = get_canny_msk(frames,
+            msk = get_canny_msk(frames[i],
                                 wall_roi,
                                 floor_roi, 
-                                session_config['t1'], session_config['t2'],
+                                session_config['canny_t1'], session_config['canny_t2'],
                                 tail_size=session_config['tail_filter_size'], 
                                 otsu=session_config['otsu'],
-                                final_dilate=session_config['final_dilate'])
+                                final_dilate=(session_config['final_dilation'],)*2)
             msks.append(msk)
             frames[i] = frames[i]*msk
         
@@ -175,7 +175,7 @@ class CannyData(param.Parameterized):
     frame_num = param.Integer(default=0, bounds=(0, 99), label="Display frame (index)")
     frames_to_extract = param.Integer(default=100, bounds=(1, None), label="Number of test frames to extract")
     # stores images of the arena and extractions
-    images = param.Dict(default={'Global ROI': None, 'Wall ROI': None,
+    images = param.Dict(default={'Global ROI': None, 'Floor ROI': None,
                         'Extracted mouse': None, 'Frame (background subtracted)': None})
     poly_streams = param.Dict(default={})
     # stores class object that holds the underlying data
@@ -214,14 +214,12 @@ class CannyData(param.Parameterized):
     compute_extraction = param.Action(lambda x: x.param.trigger('compute_extraction'), label="Compute extraction")
     save_session_and_move_btn = param.Action(lambda x: x.param.trigger('save_session_and_move_btn'), label="Save session parameters and move to next")
     save_session_btn = param.Action(lambda x: x.param.trigger('save_session_btn'), label="Save session parameters")
-    load_rois = param.Action(lambda x: x.param.trigger('load_rois'), label="Load backgrounds for ROI drawing")
-    draw_rois = param.Action(lambda x: x.param.trigger('draw_rois'), label="Draw ROI")
 
     ### canny algo params
-    canny_t1 = param.Integer(default=100, bounds=(0, 255), label="Canny t1")
-    canny_t2 = param.Integer(default=200, bounds=(0, 255), label="Canny t2")
-    otsu = param.Boolean(default=False, label="Use Otsu thresholding")
-    final_dilation = param.Integer(default=0, bounds=(0, None), label="Final dilation iterations")
+    canny_t1 = param.Integer(default=90, bounds=(0, None), label="Canny t1")
+    canny_t2 = param.Integer(default=260, bounds=(0, None), label="Canny t2")
+    otsu = param.Boolean(default=True, label="Use Otsu thresholding")
+    final_dilation = param.Integer(default=3, bounds=(1, None), label="Final dilation iterations")
 
     @param.depends('save_session_btn', 'save_session_and_move_btn', watch=True)
     def save_session(self):
@@ -249,18 +247,35 @@ class CannyData(param.Parameterized):
     @param.depends('get_extraction', watch=True)
     def change_frame_slider(self):
         self.param.frame_num.bounds = (0, min(self.frames_to_extract - 1, len(self.images['Extracted mouse']) - 1))
+        
+    def display_roi(self):
+        panels = []
+        for k, v in self.images.items():
+            if k in ('Global ROI', 'Floor ROI'):
+                img = hv.Image(v, label=k, bounds=(0, 0, v.shape[1], v.shape[0])
+                              ).opts(xlim=(0, v.shape[1]), ylim=(0, v.shape[0]), framewise=True)
+                poly = hv.Polygons([])
+                self.poly_streams[k] = hv.streams.PolyDraw(source=poly, drag=True, num_objects=4,
+                                                           show_vertices=True, styles={'fill_color': ['red']})
 
-    @param.depends('load_rois', watch=True)
+                im = (img * poly).opts(
+                    hv.opts.Path(active_tools=['poly_draw']),
+                    hv.opts.Polygons(fill_alpha=0.3, active_tools=['poly_draw']))  
+                
+                panels.append(im)
+
+        panels = reduce(add, panels).opts(hv.opts.Image()).cols(2)
+        return panels.opts(shared_axes=False, framewise=True)
+
     def load_roi(self):
         bground = self.controller.get_background()
         self.images['Global ROI'] = bground
-        self.images['Wall ROI'] = bground
+        self.images['Floor ROI'] = bground
 
-    @param.depends('draw_rois', watch=True)
     def draw_roi(self):
 
         for k,v in self.images.items():
-            if k not in ['Global ROI', 'Wall ROI']:
+            if k not in ['Global ROI', 'Floor ROI']:
                 continue
 
             bground = v
@@ -272,8 +287,8 @@ class CannyData(param.Parameterized):
             roi[y[0]:y[1], x[0]:x[1]] = 1
 
             self.images[k] = roi
-        
-    @param.depends('get_extraction', 'frame_num', 'load_roi', 'draw_roi')
+
+    @param.depends('get_extraction', 'frame_num')
     def display(self):
         panels = []
         for k, v in self.images.items():
@@ -283,30 +298,23 @@ class CannyData(param.Parameterized):
                 _img = v[min(len(v) - 1, self.frame_num)]
                 im = hv.Image(_img, label=k, bounds=(0, 0, v.shape[2], v.shape[1])
                               ).opts(xlim=(0, v.shape[2]), ylim=(0, v.shape[1]), framewise=True)
-            elif k in ('Global ROI', 'Wall ROI'):
-                img = hv.Image(v, label=k, bounds=(0, 0, v.shape[1], v.shape[0])
-                              ).opts(xlim=(0, v.shape[1]), ylim=(0, v.shape[0]), framewise=True)
-                poly = hv.Polygons([])
-                self.poly_streams[k] = hv.streams.PolyDraw(source=poly, drag=True, num_objects=4,
-                                                           show_vertices=True, styles={'fill_color': ['red']})
-
-                im = (img * poly).opts(
-                    hv.opts.Path(active_tools=['poly_draw']),
-                    hv.opts.Polygons(fill_alpha=0.3, active_tools=['poly_draw']))        
             else:
                 im = hv.Image(v, label=k, bounds=(
                     0, 0, *v.shape[::-1])).opts(xlim=(0, v.shape[1]), ylim=(0, v.shape[0]), framewise=True)
-            if k not in ('Global ROI', 'Wall ROI'):
-                panels.append(im.opts(
-                    hv.opts.Image(
-                        tools=[_hover_dict[k]],
-                        cmap='cubehelix',
-                        xlabel="Width (pixels)",
-                        ylabel="Height (pixels)",
-                    ),
-                ))
+                
+            if k in ('Global ROI', 'Floor ROI'):
+                hd = []
             else:
-                panels.append(im)
+                hd = [_hover_dict[k]]
+
+            panels.append(im.opts(
+                hv.opts.Image(
+                    tools=hd,
+                    cmap='cubehelix',
+                    xlabel="Width (pixels)",
+                    ylabel="Height (pixels)",
+                ),
+            ))
 
         panels = reduce(add, panels).opts(hv.opts.Image()).cols(2)
         return panels.opts(shared_axes=False, framewise=True)
@@ -361,8 +369,6 @@ class CannyView(Viewer):
         canny_t2 = _link_data(pn.widgets.IntInput, "canny_t2", height=40)
         otsu = _link_data(pn.widgets.Checkbox, "otsu", height=15)
         final_dilation = _link_data(pn.widgets.IntInput, "final_dilation", height=40)
-        load_rois_btn = _link_data(pn.widgets.Button, "load_rois")
-        draw_rois_btn = _link_data(pn.widgets.Button, "draw_rois")
 
         adv_extraction = pn.Column(
             crop_size,
@@ -427,8 +433,6 @@ class CannyView(Viewer):
             extraction_frame_num,
             display_frame_num,
             compute_extraction_btn,
-            load_rois_btn,
-            draw_rois_btn,
             indicator2,
             show_adv_extraction,
             adv_extraction,
@@ -440,9 +444,8 @@ class CannyView(Viewer):
         # define widget containing plots of arena and extraction
 
         # Create a Toolbar object with the PolyDraw tool
-        toolbar = Toolbar(tools=list(session_data.poly_streams.values()))
 
-        self.plotting_col = hv.DynamicMap(session_data.display, streams = list(session_data.poly_streams.values())).opts(framewise=True, toolbar=toolbar)
+        self.plotting_col = hv.DynamicMap(session_data.display).opts(framewise=True)
 
         self._layout = pn.Row(self.gui_col, self.plotting_col)
 
