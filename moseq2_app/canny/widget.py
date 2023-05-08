@@ -253,7 +253,7 @@ class CannyData(param.Parameterized):
         for k, v in self.images.items():
             if k in ('Global ROI', 'Floor ROI'):
                 img = hv.Image(v, label=k, bounds=(0, 0, v.shape[1], v.shape[0])
-                              ).opts(xlim=(0, v.shape[1]), ylim=(0, v.shape[0]), framewise=True)
+                              ).opts(xlim=(0, v.shape[1]), ylim=(0, v.shape[0]), clim = (250, v.max()), cmap='PiYG')
                 poly = hv.Polygons([])
                 self.poly_streams[k] = hv.streams.PolyDraw(source=poly, drag=True, num_objects=4,
                                                            show_vertices=True, styles={'fill_color': ['red']})
