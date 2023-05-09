@@ -90,20 +90,51 @@ class CannyWidget:
         session = self.session_config[folder]
 
         # canny thresholds
+        session['canny_extract'] = True
         session['canny_t1'] = self.session_data.canny_t1
         session['canny_t2'] = self.session_data.canny_t2
-
-        session['tail_filter_size'] = (self.session_data.tail_filter_size, ) * 2
-
         session['otsu'] = self.session_data.otsu
-
         session['final_dilation'] = self.session_data.final_dilation
-
-        session['min_height'] = self.session_data.mouse_height[0]
-        session['max_height'] = self.session_data.mouse_height[1]
-
         session['floor_roi_path'] = join(self.data_dir, self.session_data.path, 'proc/floor_roi.npy')
         session['global_roi_path'] = join(self.data_dir, self.session_data.path, 'proc/global_roi.npy')
+
+        session['min_height'], session['max_height'] = self.session_data.mouse_height
+
+        session['cable_filter_iters'] = self.session_data.cable_filters
+        session['cable_filter_shape'] = self.session_data.cable_filter_shape
+        session['cable_filter_size'] = (self.session_data.cable_filter_size, ) * 2
+
+        session['chunk_overlap'] = self.session_data.chunk_overlap
+        session['compress'] = self.session_data.compress
+        session['crop_size'] = (self.session_data.crop_size, ) * 2
+        session['flip_classifier_smoothing'] = self.session_data.flip_classifier_smoothing
+        session['frame_dtype'] = self.session_data.frame_dtype
+        session['movie_dtype'] = self.session_data.movie_dtype
+        session['pixel_format'] = self.session_data.pixel_format
+        # some simple cleanup for the spatial filter. Maybe should be more sophisticated? or move to the data class?
+        spatial_filter = eval(self.session_data.spatial_filter)
+        if isinstance(spatial_filter, (int, float)):
+            spatial_filter = [int(spatial_filter)]
+        elif not isinstance(spatial_filter, (list, tuple)):
+            print('Incorrect spatial filter format. Spatial filter should be an integer or a list of integers. Setting to [3]', end='\r')
+            spatial_filter = [3]
+        session['spatial_filter_size'] = spatial_filter
+
+        temporal_filter = eval(self.session_data.temporal_filter)
+        if isinstance(temporal_filter, (int, float)):
+            temporal_filter = [int(temporal_filter)]
+        elif not isinstance(temporal_filter, (list, tuple)):
+            print('Incorrect temporal filter format. Temporal filter should be an integer or a list of integers. Setting to [0]', end='\r')
+            temporal_filter = [0]
+        session['temporal_filter_size'] = temporal_filter
+
+        session['tail_filter_iters'] = self.session_data.tail_filters
+        session['tail_filter_shape'] = self.session_data.tail_filter_shape
+        session['tail_filter_size'] = (self.session_data.tail_filter_size, ) * 2
+
+        session['use_tracking_model'] = self.session_data.tracking_model_flag
+        session['tracking_model_mask_threshold'] = self.session_data.tracking_model_mask_thresh
+
 
     def save_session_parameters(self):
         self.set_session_config_vars()
@@ -193,6 +224,7 @@ class CannyData(param.Parameterized):
 
     tracking_model_flag = param.Boolean(default=False, label="Use tracking model")
     tracking_model_mask_thresh = param.Number(default=-16, bounds=(None, 0), label="Tracking model mouse likelihood threshold")
+    
 
     cable_filters = param.Integer(default=0, bounds=(0, None), label="Cable filter iterations")
     cable_filter_shape = param.Selector(objects=['rectangle', 'ellipse'], default='rectangle', label="Cable filter shape")
